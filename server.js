@@ -105,9 +105,10 @@ async function loadConfig() {
 async function saveConfig(cfg) {
   const normalized = normalizeConfig(cfg);
   await redis.set('config.json', normalized);
-  // FIX: scheduler cache ও update করো — পরের tick এ stale data না যাক
+  // cache immediately update করো
   schedulerConfigCache = normalized;
   schedulerConfigCacheAt = Date.now();
+  return normalized;
 }
 async function loadChannelState(p, c) { return (await redis.get(`state:${p}:${c}`)) || {}; }
 async function saveChannelState(p, c, s) { await redis.set(`state:${p}:${c}`, s); }
@@ -752,11 +753,13 @@ app.get('/api/time', async (req, res) => {
   const fired = await loadFired();
   let nextSlots = [];
   for (const p of PLATFORMS) for (const ch of (cfg.channels[p] || [])) {
-    if (!ch.enabled || !ch.schedule?.length) continue;
+    if (!ch.schedule?.length) continue;  // enabled না হলেও schedule দেখাও
     for (const slot of ch.schedule) {
       const [sHH, sMM] = slot.split(':').map(Number);
       const diff = (sHH * 60 + sMM) - totalMins;
-      nextSlots.push({ platform: p, ch: ch.name, slot, diff: diff < 0 ? diff + 1440 : diff, done: !!fired[`${p}_${ch.id}_${slot}_${date}`] });
+      // enabled না হলে '(disabled)' label যোগ করো
+      const label = ch.enabled ? ch.name : ch.name + ' (disabled)';
+      nextSlots.push({ platform: p, ch: label, slot, diff: diff < 0 ? diff + 1440 : diff, done: ch.enabled ? !!fired[`${p}_${ch.id}_${slot}_${date}`] : false });
     }
   }
   nextSlots.sort((a, b) => a.diff - b.diff);
@@ -764,7 +767,7 @@ app.get('/api/time', async (req, res) => {
   res.json({ bd: `${current} (${date})`, utc: new Date().toISOString(), next_upload: next ? `[${next.platform}] ${next.ch} @ ${next.slot} (${next.diff}m পরে)` : 'কোনো schedule নেই' });
 });
 
-app.get('/version', (req, res) => res.json({ version:'v12.2', build:'bugfixed', platforms: PLATFORMS, fixes: ['job-error-status','scheduler-cache','status-mget','ig-timeout','tiktok-error-detect','tiktok-token-race','fb-api-v22'] }));
+app.get('/version', (req, res) => res.json({ version:'v12.3', build:'bugfixed', platforms: PLATFORMS, fixes: ['job-error-status','scheduler-cache','status-mget','ig-timeout','tiktok-error-detect','tiktok-token-race','fb-api-v22'] }));
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
